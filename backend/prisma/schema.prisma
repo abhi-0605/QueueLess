@@ -1,0 +1,213 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ROLE_USER
+  ROLE_STAFF
+  ROLE_ADMIN
+}
+
+enum CounterStatus {
+  OPEN
+  CLOSED
+  ON_BREAK
+}
+
+enum QueueStatus {
+  OPEN
+  CLOSED
+}
+
+enum QueueEntryStatus {
+  WAITING
+  CALLED
+  IN_SERVICE
+  COMPLETED
+  SKIPPED
+  CANCELLED
+  NO_SHOW
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CHECKED_IN
+  COMPLETED
+  NO_SHOW
+  CANCELLED
+}
+
+enum NotificationType {
+  TOKEN_CREATED
+  POSITION_CHANGED
+  TURN_APPROACHING
+  TOKEN_CALLED
+  CANCELLED
+  SKIPPED
+}
+
+enum NotificationChannel {
+  EMAIL
+  IN_APP
+}
+
+model Organization {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+
+  users       User[]
+  services    Service[]
+
+  @@map("organizations")
+}
+
+model User {
+  id              String        @id @default(uuid())
+  organization_id String?
+  name            String
+  email           String        @unique
+  password_hash   String
+  role            Role          @default(ROLE_USER)
+  created_at      DateTime      @default(now())
+  updated_at      DateTime      @updatedAt
+
+  organization       Organization?       @relation(fields: [organization_id], references: [id], onDelete: SetNull)
+  assigned_counters  Counter[]           @relation("StaffCounters")
+  queue_entries      QueueEntry[]
+  appointments       Appointment[]
+  notifications      Notification[]
+  status_changes     QueueEntryHistory[] @relation("ChangedByUser")
+
+  @@map("users")
+}
+
+model Service {
+  id                       String        @id @default(uuid())
+  organization_id          String
+  name                     String
+  description              String?
+  avg_service_time_seconds Int           @default(300)
+  priority_config          Json?
+  is_active                Boolean       @default(true)
+  created_at               DateTime      @default(now())
+  updated_at               DateTime      @updatedAt
+
+  organization Organization  @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  counters     Counter[]
+  queues       Queue[]
+  appointments Appointment[]
+
+  @@map("services")
+}
+
+model Counter {
+  id                String        @id @default(uuid())
+  service_id        String
+  name              String
+  status            CounterStatus @default(CLOSED)
+  assigned_staff_id String?
+  created_at        DateTime      @default(now())
+  updated_at        DateTime      @updatedAt
+
+  service        Service      @relation(fields: [service_id], references: [id], onDelete: Cascade)
+  assigned_staff User?        @relation("StaffCounters", fields: [assigned_staff_id], references: [id], onDelete: SetNull)
+  queue_entries  QueueEntry[]
+
+  @@map("counters")
+}
+
+model Queue {
+  id         String      @id @default(uuid())
+  service_id String
+  date       DateTime    @db.Date
+  status     QueueStatus @default(OPEN)
+  created_at DateTime    @default(now())
+  updated_at DateTime    @updatedAt
+
+  service Service      @relation(fields: [service_id], references: [id], onDelete: Cascade)
+  entries QueueEntry[]
+
+  @@unique([service_id, date])
+  @@map("queues")
+}
+
+model QueueEntry {
+  id             String           @id @default(uuid())
+  queue_id       String
+  user_id        String
+  counter_id     String?
+  token_number   String
+  status         QueueEntryStatus @default(WAITING)
+  priority_score Int              @default(0)
+  joined_at      DateTime         @default(now())
+  called_at      DateTime?
+  started_at     DateTime?
+  completed_at   DateTime?
+
+  queue         Queue               @relation(fields: [queue_id], references: [id], onDelete: Cascade)
+  user          User                @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  counter       Counter?            @relation(fields: [counter_id], references: [id], onDelete: SetNull)
+  appointment   Appointment?
+  notifications Notification[]
+  history       QueueEntryHistory[]
+
+  @@index([queue_id, status, priority_score, joined_at])
+  @@index([user_id])
+  @@map("queue_entries")
+}
+
+model Appointment {
+  id             String            @id @default(uuid())
+  user_id        String
+  service_id     String
+  scheduled_at   DateTime
+  status         AppointmentStatus @default(SCHEDULED)
+  queue_entry_id String?           @unique
+  created_at     DateTime          @default(now())
+
+  user        User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  service     Service     @relation(fields: [service_id], references: [id], onDelete: Cascade)
+  queue_entry QueueEntry? @relation(fields: [queue_entry_id], references: [id], onDelete: SetNull)
+
+  @@index([service_id, scheduled_at])
+  @@map("appointments")
+}
+
+model Notification {
+  id             String              @id @default(uuid())
+  user_id        String
+  queue_entry_id String?
+  type           NotificationType
+  channel        NotificationChannel
+  payload        Json?
+  sent_at        DateTime            @default(now())
+  read_at        DateTime?
+
+  user        User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  queue_entry QueueEntry? @relation(fields: [queue_entry_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, read_at])
+  @@map("notifications")
+}
+
+model QueueEntryHistory {
+  id                 String   @id @default(uuid())
+  queue_entry_id     String
+  previous_status    String
+  new_status         String
+  changed_by_user_id String?
+  changed_at         DateTime @default(now())
+
+  queue_entry QueueEntry @relation(fields: [queue_entry_id], references: [id], onDelete: Cascade)
+  changed_by  User?      @relation("ChangedByUser", fields: [changed_by_user_id], references: [id], onDelete: SetNull)
+
+  @@map("queue_entry_history")
+}
